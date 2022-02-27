@@ -1,0 +1,153 @@
+# This workflow will build a package using Maven and then publish it to GitHub packages when a release is created
+# For more information see: https://github.com/actions/setup-java/blob/main/docs/advanced-usage.md#apache-maven-with-a-settings-path
+
+name: Native Application (All Versions)
+
+on:
+  workflow_dispatch:
+env:
+  tag_name: 0.0.1
+  java_version: 17
+  java_version_name: java17
+  graalvm: '22.0.0.2'
+  mandrel_builder_image: 'quay.io/quarkus/ubi-quarkus-mandrel:22.0.0.2-Final-java17'
+jobs:
+  linux-jdk17-mandrel-x64:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v2
+      - uses: dev-drprasad/delete-tag-and-release@v0.2.0
+        name: Delete the previous release
+        with:
+          delete_release: true
+          tag_name: ${{ env.tag_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ env.tag_name }}
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push upload url to file
+        run: echo "${{ steps.create_release.outputs.upload_url }}" > upload_url.txt
+      - name: Upload upload_url artifact
+        uses: actions/upload-artifact@v2
+        with:
+          name: upload_url.txt
+          path: upload_url.txt
+      - name: Set up JDK 17
+        uses: actions/setup-java@v2
+        with:
+          java-version: ${{ env.java_version }}
+          distribution: 'temurin'
+          cache: maven
+      - name: Build fat jar with maven
+        run: mvn -B clean package
+      - name: Build native app with maven
+        run: mvn -B package -Pnative -Dquarkus.native.builder-image=${{ env.mandrel_builder_image }}
+      - name: Set Upload URL to Environment Variable
+        run: echo "upload_url=${{ steps.create_release.outputs.upload_url }}" >> $GITHUB_ENV
+      - name: Upload Release Asset (Linux binary)
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ env.upload_url }}
+          asset_path: target/app-runner
+          asset_name: quarkus-wrk-linux-64
+          asset_content_type: application/octet-stream
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload Release Asset (Fat Jar)
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ env.upload_url }}
+          asset_path: target/app-runner.jar
+          asset_name: quarkus-wrk-runner.jar
+          asset_content_type: application/octet-stream
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  windows-amd64:
+    runs-on: windows-2019
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v2
+      - name: 'Setup GraalVM'
+        uses: DeLaGuardo/setup-graalvm@5.0
+        with:
+          graalvm: ${{ env.graalvm }}
+          java: ${{ env.java_version_name }}
+          arch: 'amd64'
+          personal-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: 'Install native-image'
+        run: gu.cmd install native-image
+      - name: 'Print Info'
+        run: java -version && gu.cmd list -v && mvn --version && pwd
+      - name: 'Build Image (windows)'
+        run: >-
+          "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Auxiliary\Build\vcvars64.bat" && mvn --batch-mode -Pnative clean package
+        shell: cmd
+      - name: Download upload_url artifact
+        uses: actions/download-artifact@v2
+        with:
+          name: upload_url.txt
+      - name: Get upload_url
+        shell: bash
+        run: |
+          export upload_url=$(cat upload_url.txt)
+          rm upload_url.txt
+          echo "upload_url=${upload_url}" >> $GITHUB_ENV
+      - name: Upload Release Asset (Windows exe)
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ env.upload_url }}
+          asset_path: target/app-runner.exe
+          asset_name: quarkus-wrk.exe
+          asset_content_type: application/octet-stream
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  macos-darwin-amd64:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v2
+      - name: 'Setup GraalVM'
+        uses: DeLaGuardo/setup-graalvm@5.0
+        with:
+          graalvm: ${{ env.graalvm }}
+          java: ${{ env.java_version_name }}
+          arch: 'amd64'
+          platform: 'darwin'
+          personal-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: 'Install native-image'
+        run: gu install native-image
+      - name: 'Print Info'
+        run: java -version && gu list -v && mvn --version && pwd
+      - name: 'Build Image (macos / darwin)'
+        run: mvn --batch-mode -Pnative clean package
+      - name: Download upload_url artifact
+        uses: actions/download-artifact@v2
+        with:
+          name: upload_url.txt
+      - name: Get upload_url
+        run: |
+          export upload_url=$(cat upload_url.txt)
+          rm upload_url.txt
+          echo "upload_url=${upload_url}" >> $GITHUB_ENV
+      - name: Upload Release Asset
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ env.upload_url }}
+          asset_path: target/app-runner
+          asset_name: quarkus-wrk-macos
+          asset_content_type: application/octet-stream
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
